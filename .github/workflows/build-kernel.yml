@@ -360,18 +360,18 @@ jobs:
           export KSU_EXPECTED_SIZE=${{ env.KSU_EXPECTED_SIZE }}
           export KSU_EXPECTED_HASH=${{ env.KSU_EXPECTED_HASH }}
         fi
-        make -j$(nproc --all) CC=clang V=1 O=out ARCH=${{ env.KERNEL_ARCH }} ${{ env.EXTRA_CMDS }} ${DEVICE}_defconfig
+        make -j$(nproc --all) CC=clang V=1 O=out ARCH=${{ env.KERNEL_ARCH }} EXTRA_CFLAGS= ${{ env.EXTRA_CMDS }} ${DEVICE}_defconfig
         if [ ${{ env.ENABLE_CCACHE }} = true ]; then
             if [ ${{ env.USE_GCC }} = true ]; then
-                make -j$(nproc --all) CC="ccache gcc" V=1 O=out ARCH=${{ env.KERNEL_ARCH }} ${{ env.EXTRA_CMDS }}
+                make -j$(nproc --all) CC="ccache gcc" V=1 O=out ARCH=${{ env.KERNEL_ARCH }} EXTRA_CFLAGS= ${{ env.EXTRA_CMDS }}
             else
-                make -j$(nproc --all) CC="ccache clang" V=1 O=out ARCH=${{ env.KERNEL_ARCH }} ${{ env.EXTRA_CMDS }}
+                make -j$(nproc --all) CC="ccache clang" V=1 O=out ARCH=${{ env.KERNEL_ARCH }} EXTRA_CFLAGS= ${{ env.EXTRA_CMDS }}
             fi
         else
             if [ ${{ env.USE_GCC }} = true ]; then
-                make -j$(nproc --all) CC=gcc V=1 O=out ARCH=${{ env.KERNEL_ARCH }} ${{ env.EXTRA_CMDS }}
+                make -j$(nproc --all) CC=gcc V=1 O=out ARCH=${{ env.KERNEL_ARCH }} EXTRA_CFLAGS= ${{ env.EXTRA_CMDS }}
             else
-                make -j$(nproc --all) CC=clang V=1 O=out ARCH=${{ env.KERNEL_ARCH }} ${{ env.EXTRA_CMDS }}
+                make -j$(nproc --all) CC=clang V=1 O=out ARCH=${{ env.KERNEL_ARCH }} EXTRA_CFLAGS= ${{ env.EXTRA_CMDS }}
             fi
         fi
 
