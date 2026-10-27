@@ -265,9 +265,18 @@ jobs:
                 echo "CONFIG_KPROBE_EVENTS=y" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
             fi
         for config in CONFIG_KSU=y \
-                      CONFIG_KSU_EXTRAS=y \
                       CONFIG_KSU_TAMPER_SYSCALL_TABLE=y \
-                      CONFIG_KSU_THRONE_TRACKER_ALWAYS_THREADED=y
+                      CONFIG_KSU_SUSFS=y \
+                      CONFIG_KSU_SUSFS_SUS_PATH=y \
+                      CONFIG_KSU_SUSFS_SUS_MOUNT=y \
+                      CONFIG_KSU_SUSFS_SUS_KSTAT=y \
+                      CONFIG_KSU_SUSFS_SPOOF_UNAME=y \
+                      CONFIG_KSU_SUSFS_ENABLE_LOG=y \
+                      CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y \
+                      CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y \
+                      CONFIG_KSU_SUSFS_SUS_OVERLAYFS=y \
+                      CONFIG_KSU_SUSFS_OPEN_REDIRECT=y \
+                      CONFIG_KSU_SUSFS_SUS_MAP=y
         do
         echo "$config" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
         done
@@ -297,7 +306,7 @@ jobs:
                     }
                 fi
         fi
-        if [ ${{ env.DISABLE_LTO }} = true ]; then
+        if [ ${{ env.BUILDER_DISABLE_LTO }} = true ]; then
             sed -i 's/CONFIG_LTO=y/CONFIG_LTO=n/' arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
             sed -i 's/CONFIG_LTO_CLANG=y/CONFIG_LTO_CLANG=n/' arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
             sed -i 's/CONFIG_THINLTO=y/CONFIG_THINLTO=n/' arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
