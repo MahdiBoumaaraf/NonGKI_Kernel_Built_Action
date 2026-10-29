@@ -11,6 +11,16 @@ on:
         - 'lancelot'
         - 'merlin'
         default: 'selene'
+      build_boot_img:
+        description: 'Create boot.img using a matching stock boot image'
+        required: false
+        default: false
+        type: boolean
+      source_boot_image:
+        description: 'Direct HTTPS download URL of original boot.img (same ROM and device)'
+        required: false
+        default: ''
+        type: string
       build_ksun:
         description: 'Build KernelSU-Next A13+'
         required: true
@@ -87,6 +97,22 @@ jobs:
             echo "ANDROID_TAG=[A11+]" >> $GITHUB_ENV
         else
             echo "ANDROID_TAG=[A13+]" >> $GITHUB_ENV
+        fi
+
+    - name: Configure optional boot.img export
+      env:
+        REPACK_BOOT_INPUT: ${{ inputs.build_boot_img }}
+        BOOT_IMAGE_URL_INPUT: ${{ inputs.source_boot_image }}
+      run: |
+        if [[ "$REPACK_BOOT_INPUT" == "true" ]]; then
+          if [[ -z "$BOOT_IMAGE_URL_INPUT" || "$BOOT_IMAGE_URL_INPUT" != https://* ]]; then
+            echo "::error::Provide a direct HTTPS URL to a boot.img from the same ROM and device."
+            exit 1
+          fi
+          echo "BUILD_BOOT_IMG=true" >> "$GITHUB_ENV"
+          echo "SOURCE_BOOT_IMAGE=$BOOT_IMAGE_URL_INPUT" >> "$GITHUB_ENV"
+        else
+          echo "BUILD_BOOT_IMG=false" >> "$GITHUB_ENV"
         fi
 
     - name: Check if old Android build
@@ -243,15 +269,28 @@ jobs:
         sh -n scripts/mkcompile_h
         echo "Trimmed linker URL from kernel version metadata"
 
-    - name: Download source boot image
+    - name: Download and unpack original boot.img
       if: env.BUILD_BOOT_IMG == 'true'
       run: |
-        cd $GITHUB_WORKSPACE/kernel_workspace
-        wget -nv -O boot-source.img ${{ env.SOURCE_BOOT_IMAGE }}
-        if [ -f boot-source.img ]; then
-            echo "FORMAT_MKBOOTING=$(echo `tools/unpack_bootimg.py --boot_img=boot-source.img --format mkbootimg`)" >> $GITHUB_ENV
-            echo "HAVE_SOURCE_BOOT_IMAGE=true" >> $GITHUB_ENV
-        fi
+        set -euo pipefail
+        cd "$GITHUB_WORKSPACE/kernel_workspace"
+        curl --fail --location --retry 3 --silent --show-error \
+          --output boot-source.img "$SOURCE_BOOT_IMAGE"
+        test -s boot-source.img
+        python3 - <<'PY'
+        from pathlib import Path
+        image = Path("boot-source.img")
+        with image.open("rb") as f:
+            magic = f.read(8)
+        if magic != b"ANDROID!":
+            raise SystemExit("Not a valid Android boot.img: expected ANDROID! header")
+        print(f"Original boot image: {image.stat().st_size:,} bytes")
+        PY
+        python3 tools/unpack_bootimg.py --boot_img boot-source.img \
+          --out boot-unpacked --format mkbootimg --null > boot-args.bin
+        test -s boot-unpacked/kernel
+        test -s boot-args.bin
+        echo "HAVE_SOURCE_BOOT_IMAGE=true" >> "$GITHUB_ENV"
 
     - name: Setup KernelSU
       if: env.ENABLE_KERNELSU == 'true'
@@ -484,19 +523,38 @@ jobs:
         fi
         rm -rf AnyKernel3/.git* AnyKernel3/README.md
 
-    - name: Make boot image
+    - name: Repack and verify boot.img with the new kernel
       if: env.HAVE_SOURCE_BOOT_IMAGE == 'true' && env.CHECK_FILE_IS_OK == 'true'
       run: |
-        cd $GITHUB_WORKSPACE/kernel_workspace
-        tools/unpack_bootimg.py --boot_img boot-source.img
-        cp android-kernel/out/arch/${{ env.KERNEL_ARCH }}/boot/${{ env.KERNEL_IMAGE_NAME }} out/kernel
-        tools/mkbootimg.py ${{ env.FORMAT_MKBOOTING }} -o boot.img
-        if [ -f boot.img ]; then
-            echo "MAKE_BOOT_IMAGE_IS_OK=true" >> $GITHUB_ENV
-        else
-            echo "Boot image is empty"
-            exit 1
+        set -euo pipefail
+        cd "$GITHUB_WORKSPACE/kernel_workspace"
+        BUILT_KERNEL="android-kernel/out/arch/${{ env.KERNEL_ARCH }}/boot/${{ env.KERNEL_IMAGE_NAME }}"
+        test -s "$BUILT_KERNEL"
+        cp "$BUILT_KERNEL" boot-unpacked/kernel
+
+        # Null-separated arguments preserve the original header, cmdline and ramdisk paths.
+        mapfile -d '' -t BOOT_ARGS < boot-args.bin
+        if (( ${#BOOT_ARGS[@]} == 0 )); then
+          echo "::error::Missing original boot image metadata"
+          exit 1
         fi
+        python3 tools/mkbootimg.py "${BOOT_ARGS[@]}" -o boot.img
+        test -s boot.img
+
+        python3 tools/unpack_bootimg.py --boot_img boot.img \
+          --out boot-verified --format info > boot-repacked-info.txt
+        cmp "$BUILT_KERNEL" boot-verified/kernel
+        for item in ramdisk second recovery_dtbo dtb; do
+          if [[ -f "boot-unpacked/$item" ]]; then
+            cmp "boot-unpacked/$item" "boot-verified/$item"
+          fi
+        done
+        if [[ "$DEVICE" == "selene" ]] && (( $(stat -c %s boot.img) > 67108864 )); then
+          echo "::error::boot.img exceeds selene's 64 MiB boot partition"
+          exit 1
+        fi
+        sha256sum boot.img
+        echo "MAKE_BOOT_IMAGE_IS_OK=true" >> "$GITHUB_ENV"
 
     - name: Export kernel name from defconfig
       run: |
