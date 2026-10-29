@@ -263,6 +263,29 @@ jobs:
             git apply $GITHUB_WORKSPACE/patches/KSU_REVERT.patch
         fi
 
+    - name: Adapt KernelSU Next to Zenith SuSFS workqueue
+      if: matrix.target == 'ksun'
+      run: |
+        cd "$GITHUB_WORKSPACE/kernel_workspace/android-kernel"
+        python3 - <<'PY'
+        from pathlib import Path
+
+        path = Path("drivers/kernelsu/setuid_hook.c")
+        source = path.read_text()
+        old_extern = "extern void susfs_run_sus_path_loop(void);"
+        old_call = "    susfs_run_sus_path_loop();"
+        if source.count(old_extern) != 1 or source.count(old_call) != 1:
+            raise SystemExit("Unexpected KernelSU Next SuSFS hook; refusing to patch")
+        source = source.replace(old_extern, "extern struct work_struct susfs_extra_works;")
+        source = source.replace(old_call, "    schedule_work(&susfs_extra_works);")
+        if "#include <linux/workqueue.h>" not in source:
+            source = "#include <linux/workqueue.h>\\n".replace("\\n", "\n") + source
+        path.write_text(source)
+        PY
+        grep -q 'static void susfs_run_sus_path_loop(void)' fs/susfs.c
+        grep -q 'INIT_WORK(&susfs_extra_works, susfs_run_extra_works)' fs/susfs.c
+        echo "KernelSU Next now schedules Zenith's existing SuSFS workqueue"
+
     - name: Setup Configuration for kernel
       run: |
         cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
