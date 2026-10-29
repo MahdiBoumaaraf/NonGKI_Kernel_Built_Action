@@ -224,6 +224,24 @@ jobs:
         cd $GITHUB_WORKSPACE/kernel_workspace
         git clone --recursive ${{ env.KERNEL_SOURCE }} -b ${{ env.KERNEL_SOURCE_BRANCH }} android-kernel --depth=1
 
+    - name: Keep kernel version readable in HyperOS
+      run: |
+        cd "$GITHUB_WORKSPACE/kernel_workspace/android-kernel"
+        python3 - <<'PY'
+        from pathlib import Path
+
+        script = Path("scripts/mkcompile_h")
+        lines = script.read_text().splitlines(keepends=True)
+        matches = [i for i, line in enumerate(lines)
+                   if "printf '#define LINUX_COMPILER" in line]
+        if len(matches) != 1:
+            raise SystemExit("Unexpected mkcompile_h format; refusing to patch")
+        lines.insert(matches[0], "  LD_VERSION=$(printf '%s' \"$LD_VERSION\" | sed -E 's/[[:space:]]+\\(https?:\\/\\/[^)]*\\)//g')\n")
+        script.write_text("".join(lines))
+        PY
+        sh -n scripts/mkcompile_h
+        echo "Trimmed linker URL from kernel version metadata"
+
     - name: Download source boot image
       if: env.BUILD_BOOT_IMG == 'true'
       run: |
