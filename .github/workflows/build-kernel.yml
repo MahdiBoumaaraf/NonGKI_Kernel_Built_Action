@@ -19,7 +19,7 @@ on:
       build_ksun_old:
         description: 'Build KernelSU-Next A11+'
         required: true
-        default: true
+        default: false
         type: boolean
       build_xxksu:
         description: 'Build xxksu A13+'
@@ -29,7 +29,7 @@ on:
       build_xxksu_old:
         description: 'Build xxksu A11+'
         required: true
-        default: true
+        default: false
         type: boolean
 
 jobs:
