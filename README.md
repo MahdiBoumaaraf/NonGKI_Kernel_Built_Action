@@ -1,5 +1,5 @@
 <div align="start">
-  <h1>Kernel Build Action for Lancelot & Merlin</h1>
+  <h1>Kernel Build Action for Lancelot & Merlin & Selene</h1>
   <h3><i>Powered By GitHub Actions</i></h3>
 </div>
 
