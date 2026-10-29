@@ -11,16 +11,6 @@ on:
         - 'lancelot'
         - 'merlin'
         default: 'selene'
-      build_boot_img:
-        description: 'Create boot.img using a matching stock boot image'
-        required: false
-        default: false
-        type: boolean
-      source_boot_image:
-        description: 'Direct HTTPS download URL of original boot.img (same ROM and device)'
-        required: false
-        default: ''
-        type: string
       build_ksun:
         description: 'Build KernelSU-Next A13+'
         required: true
@@ -99,15 +89,6 @@ jobs:
             echo "ANDROID_TAG=[A13+]" >> $GITHUB_ENV
         fi
 
-    - name: Validate optional boot image URL
-      if: inputs.build_boot_img
-      env:
-        BOOT_IMAGE_URL_INPUT: ${{ inputs.source_boot_image }}
-      run: |
-        if [[ -z "$BOOT_IMAGE_URL_INPUT" || "$BOOT_IMAGE_URL_INPUT" != https://* ]]; then
-          echo "::error::Provide a direct HTTPS URL to a matching stock boot.img"
-          exit 1
-        fi
     - name: Check if old Android build
       if: contains(matrix.target, 'old')
       run: |
@@ -487,33 +468,38 @@ jobs:
         fi
         rm -rf AnyKernel3/.git* AnyKernel3/README.md
 
-    - name: Repack matching stock boot.img with compiled kernel
-      if: inputs.build_boot_img && env.CHECK_FILE_IS_OK == 'true'
-      env:
-        STOCK_BOOT_URL: ${{ inputs.source_boot_image }}
+    - name: Repack selected device boot.img with compiled kernel
+      if: env.CHECK_FILE_IS_OK == 'true'
+      shell: bash
       run: |
         set -euo pipefail
+        SOURCE_BOOT="$GITHUB_WORKSPACE/boot_img/${DEVICE}_boot.img"
+        if [[ ! -f "$SOURCE_BOOT" ]]; then
+          echo "No boot_img/${DEVICE}_boot.img found; skipping boot.img export"
+          echo "boot.img skipped: add boot_img/${DEVICE}_boot.img to enable it." >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+        fi
         WORK="$GITHUB_WORKSPACE/kernel_workspace/boot-repack"
         mkdir -p "$WORK/unpacked" "$WORK/verified"
         cd "$WORK"
-        curl --fail --location --retry 3 --silent --show-error \
-          --output boot-source.img "$STOCK_BOOT_URL"
+        cp "$SOURCE_BOOT" boot-source.img
         test -s boot-source.img
-        echo "Source boot size: $(stat -c %s boot-source.img) bytes"
-        # Use a uniform 64 MiB maximum boot image size for selene, lancelot, and merlin.
-        if (( $(stat -c %s boot-source.img) > 67108864 )); then
-          echo "::error::Input boot.img exceeds the 64 MiB size limit for $DEVICE"
+        if [[ "$(head -c 8 boot-source.img)" != "ANDROID!" ]]; then
+          echo "::error::boot_img/${DEVICE}_boot.img is not an Android boot image (or is a Git LFS pointer)"
           exit 1
         fi
-
-        # Repack with original boot metadata/ramdisk; leave vbmeta flags unchanged.
+        echo "Source boot size: $(stat -c %s boot-source.img) bytes"
+        if (( $(stat -c %s boot-source.img) > 67108864 )); then
+          echo "::error::Input boot.img exceeds the 64 MiB boot partition limit for $DEVICE"
+          exit 1
+        fi
+        # Use the original header and ramdisk, replacing only the compiled kernel.
         curl --fail --location --retry 3 --silent --show-error \
           --output magisk.apk https://github.com/topjohnwu/Magisk/releases/download/v30.7/Magisk-v30.7.apk
         unzip -p magisk.apk lib/x86_64/libmagiskboot.so > magiskboot
         test -s magiskboot
         chmod +x magiskboot
         unset PATCHVBMETAFLAG
-
         cd unpacked
         ../magiskboot unpack -h ../boot-source.img
         test -s kernel
@@ -522,10 +508,10 @@ jobs:
         cp "$BUILT_KERNEL" kernel
         ../magiskboot repack ../boot-source.img ../boot.img
         test -s ../boot.img
-
-        # Confirm unchanged ramdisk and other non-kernel components.
+        # Verify that repacking preserves original ramdisk and other non-kernel components.
         cd ../verified
         ../magiskboot unpack -h ../boot.img
+        cmp ../unpacked/kernel "$BUILT_KERNEL"
         for component in ramdisk.cpio second dtb extra recovery_dtbo; do
           if [[ -f "../unpacked/$component" ]]; then
             test -f "$component"
@@ -535,7 +521,7 @@ jobs:
         cd ..
         OUTPUT_SIZE=$(stat -c %s boot.img)
         if (( OUTPUT_SIZE > 67108864 )); then
-          echo "::error::New boot.img exceeds the 64 MiB size limit for $DEVICE"
+          echo "::error::New boot.img exceeds the 64 MiB boot partition limit for $DEVICE"
           exit 1
         fi
         echo "New boot.img: $OUTPUT_SIZE bytes"
