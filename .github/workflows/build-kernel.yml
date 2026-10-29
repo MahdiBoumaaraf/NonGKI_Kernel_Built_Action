@@ -500,8 +500,9 @@ jobs:
           --output boot-source.img "$STOCK_BOOT_URL"
         test -s boot-source.img
         echo "Source boot size: $(stat -c %s boot-source.img) bytes"
-        if [[ "$DEVICE" == "selene" ]] && (( $(stat -c %s boot-source.img) > 67108864 )); then
-          echo "::error::Input boot.img exceeds selene's 64 MiB boot partition"
+        # Use a uniform 64 MiB maximum boot image size for selene, lancelot, and merlin.
+        if (( $(stat -c %s boot-source.img) > 67108864 )); then
+          echo "::error::Input boot.img exceeds the 64 MiB size limit for $DEVICE"
           exit 1
         fi
 
@@ -533,8 +534,8 @@ jobs:
         done
         cd ..
         OUTPUT_SIZE=$(stat -c %s boot.img)
-        if [[ "$DEVICE" == "selene" ]] && (( OUTPUT_SIZE > 67108864 )); then
-          echo "::error::New boot.img exceeds selene's 64 MiB boot partition"
+        if (( OUTPUT_SIZE > 67108864 )); then
+          echo "::error::New boot.img exceeds the 64 MiB size limit for $DEVICE"
           exit 1
         fi
         echo "New boot.img: $OUTPUT_SIZE bytes"
