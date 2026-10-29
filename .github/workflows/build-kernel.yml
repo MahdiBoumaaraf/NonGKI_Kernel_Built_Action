@@ -99,22 +99,15 @@ jobs:
             echo "ANDROID_TAG=[A13+]" >> $GITHUB_ENV
         fi
 
-    - name: Configure optional boot.img export
+    - name: Validate optional boot image URL
+      if: inputs.build_boot_img
       env:
-        REPACK_BOOT_INPUT: ${{ inputs.build_boot_img }}
         BOOT_IMAGE_URL_INPUT: ${{ inputs.source_boot_image }}
       run: |
-        if [[ "$REPACK_BOOT_INPUT" == "true" ]]; then
-          if [[ -z "$BOOT_IMAGE_URL_INPUT" || "$BOOT_IMAGE_URL_INPUT" != https://* ]]; then
-            echo "::error::Provide a direct HTTPS URL to a boot.img from the same ROM and device."
-            exit 1
-          fi
-          echo "BUILD_BOOT_IMG=true" >> "$GITHUB_ENV"
-          echo "SOURCE_BOOT_IMAGE=$BOOT_IMAGE_URL_INPUT" >> "$GITHUB_ENV"
-        else
-          echo "BUILD_BOOT_IMG=false" >> "$GITHUB_ENV"
+        if [[ -z "$BOOT_IMAGE_URL_INPUT" || "$BOOT_IMAGE_URL_INPUT" != https://* ]]; then
+          echo "::error::Provide a direct HTTPS URL to a matching stock boot.img"
+          exit 1
         fi
-
     - name: Check if old Android build
       if: contains(matrix.target, 'old')
       run: |
@@ -240,12 +233,6 @@ jobs:
             fi
         fi
 
-    - name: Download mkbootimg tools
-      if: env.BUILD_BOOT_IMG == 'true'
-      run: |
-        cd $GITHUB_WORKSPACE/kernel_workspace
-        git clone https://android.googlesource.com/platform/system/tools/mkbootimg tools -b master-kernel-build-2022 --depth=1
-
     - name: Download kernel source
       run: |
         cd $GITHUB_WORKSPACE/kernel_workspace
@@ -268,29 +255,6 @@ jobs:
         PY
         sh -n scripts/mkcompile_h
         echo "Trimmed linker URL from kernel version metadata"
-
-    - name: Download and unpack original boot.img
-      if: env.BUILD_BOOT_IMG == 'true'
-      run: |
-        set -euo pipefail
-        cd "$GITHUB_WORKSPACE/kernel_workspace"
-        curl --fail --location --retry 3 --silent --show-error \
-          --output boot-source.img "$SOURCE_BOOT_IMAGE"
-        test -s boot-source.img
-        python3 - <<'PY'
-        from pathlib import Path
-        image = Path("boot-source.img")
-        with image.open("rb") as f:
-            magic = f.read(8)
-        if magic != b"ANDROID!":
-            raise SystemExit("Not a valid Android boot.img: expected ANDROID! header")
-        print(f"Original boot image: {image.stat().st_size:,} bytes")
-        PY
-        python3 tools/unpack_bootimg.py --boot_img boot-source.img \
-          --out boot-unpacked --format mkbootimg --null > boot-args.bin
-        test -s boot-unpacked/kernel
-        test -s boot-args.bin
-        echo "HAVE_SOURCE_BOOT_IMAGE=true" >> "$GITHUB_ENV"
 
     - name: Setup KernelSU
       if: env.ENABLE_KERNELSU == 'true'
@@ -523,39 +487,59 @@ jobs:
         fi
         rm -rf AnyKernel3/.git* AnyKernel3/README.md
 
-    - name: Repack and verify boot.img with the new kernel
-      if: env.HAVE_SOURCE_BOOT_IMAGE == 'true' && env.CHECK_FILE_IS_OK == 'true'
+    - name: Repack matching stock boot.img with compiled kernel
+      if: inputs.build_boot_img && env.CHECK_FILE_IS_OK == 'true'
+      env:
+        STOCK_BOOT_URL: ${{ inputs.source_boot_image }}
       run: |
         set -euo pipefail
-        cd "$GITHUB_WORKSPACE/kernel_workspace"
-        BUILT_KERNEL="android-kernel/out/arch/${{ env.KERNEL_ARCH }}/boot/${{ env.KERNEL_IMAGE_NAME }}"
-        test -s "$BUILT_KERNEL"
-        cp "$BUILT_KERNEL" boot-unpacked/kernel
-
-        # Null-separated arguments preserve the original header, cmdline and ramdisk paths.
-        mapfile -d '' -t BOOT_ARGS < boot-args.bin
-        if (( ${#BOOT_ARGS[@]} == 0 )); then
-          echo "::error::Missing original boot image metadata"
+        WORK="$GITHUB_WORKSPACE/kernel_workspace/boot-repack"
+        mkdir -p "$WORK/unpacked" "$WORK/verified"
+        cd "$WORK"
+        curl --fail --location --retry 3 --silent --show-error \
+          --output boot-source.img "$STOCK_BOOT_URL"
+        test -s boot-source.img
+        echo "Source boot size: $(stat -c %s boot-source.img) bytes"
+        if [[ "$DEVICE" == "selene" ]] && (( $(stat -c %s boot-source.img) > 67108864 )); then
+          echo "::error::Input boot.img exceeds selene's 64 MiB boot partition"
           exit 1
         fi
-        python3 tools/mkbootimg.py "${BOOT_ARGS[@]}" -o boot.img
-        test -s boot.img
 
-        python3 tools/unpack_bootimg.py --boot_img boot.img \
-          --out boot-verified --format info > boot-repacked-info.txt
-        cmp "$BUILT_KERNEL" boot-verified/kernel
-        for item in ramdisk second recovery_dtbo dtb; do
-          if [[ -f "boot-unpacked/$item" ]]; then
-            cmp "boot-unpacked/$item" "boot-verified/$item"
+        # Repack with original boot metadata/ramdisk; leave vbmeta flags unchanged.
+        curl --fail --location --retry 3 --silent --show-error \
+          --output magisk.apk https://github.com/topjohnwu/Magisk/releases/download/v30.7/Magisk-v30.7.apk
+        unzip -p magisk.apk lib/x86_64/libmagiskboot.so > magiskboot
+        test -s magiskboot
+        chmod +x magiskboot
+        unset PATCHVBMETAFLAG
+
+        cd unpacked
+        ../magiskboot unpack -h ../boot-source.img
+        test -s kernel
+        BUILT_KERNEL="$GITHUB_WORKSPACE/kernel_workspace/android-kernel/out/arch/${{ env.KERNEL_ARCH }}/boot/${{ env.KERNEL_IMAGE_NAME }}"
+        test -s "$BUILT_KERNEL"
+        cp "$BUILT_KERNEL" kernel
+        ../magiskboot repack ../boot-source.img ../boot.img
+        test -s ../boot.img
+
+        # Confirm unchanged ramdisk and other non-kernel components.
+        cd ../verified
+        ../magiskboot unpack -h ../boot.img
+        for component in ramdisk.cpio second dtb extra recovery_dtbo; do
+          if [[ -f "../unpacked/$component" ]]; then
+            test -f "$component"
+            cmp "../unpacked/$component" "$component"
           fi
         done
-        if [[ "$DEVICE" == "selene" ]] && (( $(stat -c %s boot.img) > 67108864 )); then
-          echo "::error::boot.img exceeds selene's 64 MiB boot partition"
+        cd ..
+        OUTPUT_SIZE=$(stat -c %s boot.img)
+        if [[ "$DEVICE" == "selene" ]] && (( OUTPUT_SIZE > 67108864 )); then
+          echo "::error::New boot.img exceeds selene's 64 MiB boot partition"
           exit 1
         fi
+        echo "New boot.img: $OUTPUT_SIZE bytes"
         sha256sum boot.img
-        echo "MAKE_BOOT_IMAGE_IS_OK=true" >> "$GITHUB_ENV"
-
+        echo "BOOT_REPACK_OK=true" >> "$GITHUB_ENV"
     - name: Export kernel name from defconfig
       run: |
         DEFCONFIG_FILE="kernel_workspace/android-kernel/arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig"
@@ -585,9 +569,9 @@ jobs:
         name: dtbo-${{ env.DEVICE }}-${{ env.BUILD_TIME }}
         path: kernel_workspace/android-kernel/out/arch/${{ env.KERNEL_ARCH }}/boot/dtbo.img
 
-    - name: Upload boot image
-      if: env.MAKE_BOOT_IMAGE_IS_OK == 'true'
+    - name: Upload repacked boot image
+      if: env.BOOT_REPACK_OK == 'true'
       uses: actions/upload-artifact@v6
       with:
-        name: boot${{ env.LOCALVERSION }}${{ env.UPLOADNAME }}-${{ env.DEVICE }}-${{ env.BUILD_TIME }}
-        path: kernel_workspace/boot.img
+        name: boot-${{ env.DEVICE }}${{ env.UPLOADNAME }}-${{ env.BUILD_TIME }}
+        path: kernel_workspace/boot-repack/boot.img
