@@ -128,8 +128,8 @@ A workflow to automatically build an Android kernel
 | ENABLE_CCACHE | <div align="center">✅</div> | Enable [ccache](https://ccache.dev) | <div align="center">`false`</div> |
 | REMOVE_UNUSED_PACKAGES| <div align="center">✅</div> | Remove unnecessary packages and free up more disk space for builder | <div align="center">`false`</div> |
 | NEED_DTBO | <div align="center">✅</div> | Upload DTBO | <div align="center">`false`</div> |
-| BUILD_BOOT_IMG | <div align="center">✅</div> | Repack boot.img by replacing the kernel in it with the compiled kernel | <div align="center">`false`</div> |
-| SOURCE_BOOT_IMAGE | <div align="center">✅</div> | Link to the original boot.img for repackage it | `https://raw.githubusercontent.com/xiaoleGun/KernelSU_action/main/boot/boot.img` |
+
+For an optional `boot.img` artifact, open **Run workflow**, enable **Create boot.img using a matching stock boot image** and enter a direct HTTPS download URL for the original `boot.img` from the **same device and ROM**. The build uses MagiskBoot to preserve the original boot metadata and ramdisk while replacing the kernel. For selene, the output must fit in the **64 MiB** boot partition; no unverified partition size is imposed for lancelot or merlin. If unchecked, no boot image is downloaded or repacked.
 
 <br>
 
