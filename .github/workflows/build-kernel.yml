@@ -271,6 +271,30 @@ jobs:
         grep -Fq 'susfs_sus_kstat_spoof_show_map_vma' fs/proc/task_mmu.c || { echo "SUSFS 2.3 kstat VFS caller missing"; exit 1; }
         grep -Fq 'STATX_SUS_KSTAT_FUSE' include/linux/susfs_def.h || { echo "SUSFS 2.3 FUSE kstat marker missing"; exit 1; }
         echo "SuSFS v2.3.0 API and kernel call sites verified"
+        # Check actual Linux 4.14 call-site migrations, not just version strings.
+        for required in \
+          "fs/proc/cmdline.c:susfs_is_fake_cmdline_or_bootconfig_buffer_set" \
+          "fs/namespace.c:susfs_is_sdcard_android_data_not_decrypted" \
+          "fs/proc/fd.c:susfs_sus_kstat_spoof_proc_fd_seq_show" \
+          "fs/proc/task_mmu.c:susfs_open_redirect_spoof_show_map_vma_srcu" \
+          "fs/statfs.c:susfs_sus_kstat_spoof_vfs_statfs"; do
+          file="${required%%:*}"
+          needle="${required#*:}"
+          grep -Fq "$needle" "$file" || { echo "Incomplete SuSFS 2.3.0 port: $file lacks $needle"; exit 1; }
+        done
+        for obsolete in \
+          "fs/proc/cmdline.c:extern int susfs_spoof_cmdline_or_bootconfig" \
+          "fs/proc/fd.c:susfs_open_redirect_spoof_seq_show" \
+          "fs/statfs.c:susfs_open_redirect_spoof_vfs_statfs(" \
+          "fs/proc/task_mmu.c:susfs_open_redirect_spoof_show_map_vma("; do
+          file="${obsolete%%:*}"
+          needle="${obsolete#*:}"
+          if grep -Fq "$needle" "$file"; then
+            echo "Obsolete SuSFS 2.2 API still used in $file: $needle"
+            exit 1
+          fi
+        done
+        echo "SuSFS 2.3.0 VFS migration signatures verified"
 
     - name: Port Zenith SuSFS to official KernelSU-Next legacy
       if: startsWith(matrix.target, 'ksun')
