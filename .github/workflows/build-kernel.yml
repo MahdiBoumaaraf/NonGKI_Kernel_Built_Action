@@ -245,6 +245,27 @@ jobs:
           { echo "NoMount kernel Makefile integration missing"; exit 1; }
         echo "Zenith NoMount 2.2.0 protocol 22 source checks passed"
 
+    - name: Verify shared SuSFS 2.3.0 VFS source invariants
+      if: env.DEVICE == 'selene'
+      run: |
+        set -euo pipefail
+        cd "$GITHUB_WORKSPACE/kernel_workspace/android-kernel"
+        grep -Fqx '#define SUSFS_VERSION "v2.3.0"' include/linux/susfs.h ||
+          { echo "Zenith SuSFS 2.3.0 header missing"; exit 1; }
+        for required in \
+          "include/linux/susfs_def.h:inode->i_mapping->flags" \
+          "include/linux/susfs_def.h:STATX_SUS_KSTAT" \
+          "fs/susfs.c:susfs_sus_kstat_spoof_generic_fillattr" \
+          "fs/susfs.c:susfs_sus_kstat_spoof_show_map_vma" \
+          "fs/stat.c:susfs_sus_kstat_spoof_generic_fillattr" \
+          "fs/proc/task_mmu.c:susfs_sus_kstat_spoof_show_map_vma"; do
+          file="${required%%:*}"
+          needle="${required#*:}"
+          grep -Fq "$needle" "$file" ||
+            { echo "Incomplete SuSFS v2.3.0 VFS source: $file lacks $needle"; exit 1; }
+        done
+        echo "Zenith SuSFS v2.3.0 VFS source invariants verified"
+
     - name: Keep kernel version readable in HyperOS
       run: |
         cd "$GITHUB_WORKSPACE/kernel_workspace/android-kernel"
