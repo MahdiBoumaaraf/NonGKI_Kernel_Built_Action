@@ -241,35 +241,19 @@ jobs:
       if: env.ENABLE_KERNELSU == 'true'
       run: |
         cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
-        curl -LSs "$KERNELSU_SETUP_SOURCE" | bash -s ${{ env.KERNELSU_TAG }}
-        KSU_VERSION="_$(cd $(echo "$KERNELSU_SETUP_SOURCE" | cut -d/ -f5) || cd KernelSU && expr $(git rev-list --count HEAD) + 10200)"
+        curl -fLSs "$KERNELSU_SETUP_SOURCE" | bash -s "$KERNELSU_TAG"
+        ACTUAL_KSU_SHA="$(git -C KernelSU-Next rev-parse HEAD)"
+        test "$ACTUAL_KSU_SHA" = "$KERNELSU_TAG" || { echo "KernelSU commit mismatch"; exit 1; }
+        KSU_VERSION="_${ACTUAL_KSU_SHA:0:10}"
         echo "UPLOADNAME=-KernelSU-${{ matrix.target }}$KSU_VERSION" >> $GITHUB_ENV
         if [ ${{ env.KSU_REVERT }} = true ]; then
             git apply $GITHUB_WORKSPACE/patches/KSU_REVERT.patch
         fi
 
-    - name: Adapt KernelSU Next to Zenith SuSFS workqueue
-      if: matrix.target == 'ksun'
+    - name: Port Zenith SuSFS to official KernelSU-Next legacy
+      if: startsWith(matrix.target, 'ksun')
       run: |
-        cd "$GITHUB_WORKSPACE/kernel_workspace/android-kernel"
-        python3 - <<'PY'
-        from pathlib import Path
-
-        path = Path("drivers/kernelsu/setuid_hook.c")
-        source = path.read_text()
-        old_extern = "extern void susfs_run_sus_path_loop(void);"
-        old_call = "    susfs_run_sus_path_loop();"
-        if source.count(old_extern) != 1 or source.count(old_call) != 1:
-            raise SystemExit("Unexpected KernelSU Next SuSFS hook; refusing to patch")
-        source = source.replace(old_extern, "extern struct work_struct susfs_extra_works;")
-        source = source.replace(old_call, "    schedule_work(&susfs_extra_works);")
-        if "#include <linux/workqueue.h>" not in source:
-            source = "#include <linux/workqueue.h>\\n".replace("\\n", "\n") + source
-        path.write_text(source)
-        PY
-        grep -q 'static void susfs_run_sus_path_loop(void)' fs/susfs.c
-        grep -q 'INIT_WORK(&susfs_extra_works, susfs_run_extra_works)' fs/susfs.c
-        echo "KernelSU Next now schedules Zenith's existing SuSFS workqueue"
+        python3 "$GITHUB_WORKSPACE/scripts/port_ksun_susfs.py" "$GITHUB_WORKSPACE/kernel_workspace/android-kernel"
 
     - name: Setup Configuration for kernel
       run: |
@@ -290,22 +274,11 @@ jobs:
                 echo "CONFIG_HAVE_KPROBES=y" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
                 echo "CONFIG_KPROBE_EVENTS=y" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
             fi
-        for config in CONFIG_KSU=y \
-                      CONFIG_KSU_TAMPER_SYSCALL_TABLE=y \
-                      CONFIG_KSU_SUSFS=y \
-                      CONFIG_KSU_SUSFS_SUS_PATH=y \
-                      CONFIG_KSU_SUSFS_SUS_MOUNT=y \
-                      CONFIG_KSU_SUSFS_SUS_KSTAT=y \
-                      CONFIG_KSU_SUSFS_SPOOF_UNAME=y \
-                      CONFIG_KSU_SUSFS_ENABLE_LOG=y \
-                      CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y \
-                      CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y \
-                      CONFIG_KSU_SUSFS_SUS_OVERLAYFS=y \
-                      CONFIG_KSU_SUSFS_OPEN_REDIRECT=y \
-                      CONFIG_KSU_SUSFS_SUS_MAP=y
-        do
-        echo "$config" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
-        done
+            if [[ "${{ matrix.target }}" == ksun* ]]; then
+                echo "CONFIG_KSU=y" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
+                echo "CONFIG_KSU_MANUAL_HOOK=y" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
+                echo "# CONFIG_KSU_KPROBES_HOOK is not set" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
+            fi
         fi
         if [ ${{ env.ADD_OVERLAYFS_CONFIG }} = true ]; then
             echo "CONFIG_OVERLAY_FS=y" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
