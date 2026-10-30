@@ -61,7 +61,7 @@ A workflow to automatically build an Android kernel
 ## Options Guide
 
 > [!NOTE]
-> Build-specific options are in [config-ksun.env](config-ksun.env) and [config-xxksu.env](config-xxksu.env). Run-time choices (device, KernelSU implementation and optional boot.img) are in **Actions → Build Kernel → Run workflow**.
+> Build-specific options are in [config-ksun.env](config-ksun.env) and [config-xxksu.env](config-xxksu.env). Device and KernelSU implementation are chosen under **Actions → Build Kernel → Run workflow**; boot.img sources are automatically read from the [`boot_img/`](boot_img/README.md) folder.
 
 | Base section options | Optional | Description | Example value |
 |---------------------|----------|-------------|----------------|
@@ -129,7 +129,7 @@ A workflow to automatically build an Android kernel
 | REMOVE_UNUSED_PACKAGES| <div align="center">✅</div> | Remove unnecessary packages and free up more disk space for builder | <div align="center">`false`</div> |
 | NEED_DTBO | <div align="center">✅</div> | Upload DTBO | <div align="center">`false`</div> |
 
-For an optional `boot.img` artifact, open **Run workflow**, enable **Create boot.img from an original matching ROM image** and enter a direct **HTTPS download URL** for the original `boot.img` from the **same device and ROM**. This option defaults to **off**. The build uses MagiskBoot to preserve the original boot metadata and ramdisk while replacing the kernel. For selene, it validates and pads the output to **64 MiB**. For lancelot/merlin, whose boot partition sizes have not been verified, it rejects an output larger than the source image and retains that image's size rather than assuming 64 MiB. It does not automatically use files in `boot_img/`; the old bundled-image creation path has been retired.
+For a `boot.img` artifact, put the **original unmodified** boot image from the matching device and ROM inside [`boot_img/`](boot_img/README.md) named `selene_boot.img`, `lancelot_boot.img`, or `merlin_boot.img`. The workflow automatically uses `boot_img/${DEVICE}_boot.img` after a successful kernel build, without any URL or extra input. If that file is missing, only the boot image export is skipped; the kernel and AnyKernel3 artifacts are still produced. MagiskBoot retains the stock boot metadata and ramdisk while replacing the kernel. For **selene**, the result is validated and padded to **64 MiB**. For lancelot/merlin, the source image size is retained because their actual boot partition limits have not been verified.
 
 <br>
 

@@ -31,15 +31,7 @@ on:
         required: true
         default: false
         type: boolean
-      create_boot_img:
-        description: 'Create boot.img from an original matching ROM image'
-        required: false
-        default: false
-        type: boolean
-      boot_img_url:
-        description: 'Direct HTTPS URL to original boot.img (required if enabled)'
-        required: false
-        type: string
+
 
 jobs:
   generate-build-matrix:
@@ -635,25 +627,24 @@ jobs:
         fi
         rm -rf AnyKernel3/.git* AnyKernel3/README.md
 
-    - name: Repack optional boot.img from matching ROM source
-      if: env.CHECK_FILE_IS_OK == 'true' && inputs.create_boot_img == true
+    - name: Repack device boot.img from boot_img directory
+      if: env.CHECK_FILE_IS_OK == 'true'
       shell: bash
-      env:
-        SOURCE_BOOT_URL: ${{ inputs.boot_img_url }}
       run: |
         set -euo pipefail
-        if [[ "$SOURCE_BOOT_URL" != https://* ]]; then
-          echo "::error::A direct HTTPS URL to the matching original boot.img is required."
-          exit 1
+        SOURCE_BOOT="$GITHUB_WORKSPACE/boot_img/${DEVICE}_boot.img"
+        if [[ ! -f "$SOURCE_BOOT" ]]; then
+          echo "No boot_img/${DEVICE}_boot.img found; skipping boot.img export"
+          echo "boot.img skipped: add boot_img/${DEVICE}_boot.img to enable it." >> "$GITHUB_STEP_SUMMARY"
+          exit 0
         fi
         WORK="$GITHUB_WORKSPACE/kernel_workspace/boot-repack"
         mkdir -p "$WORK/unpacked" "$WORK/verified"
         cd "$WORK"
-        curl --fail --location --retry 3 --connect-timeout 20 \
-          --output boot-source.img "$SOURCE_BOOT_URL"
+        cp "$SOURCE_BOOT" boot-source.img
         test -s boot-source.img
         if [[ "$(head -c 8 boot-source.img)" != "ANDROID!" ]]; then
-          echo "::error::The source is not a valid Android boot image."
+          echo "::error::boot_img/${DEVICE}_boot.img is not a valid Android boot image (or is a Git LFS pointer)"
           exit 1
         fi
         SOURCE_SIZE=$(stat -c %s boot-source.img)
