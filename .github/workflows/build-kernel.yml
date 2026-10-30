@@ -14,7 +14,7 @@ on:
       build_ksun:
         description: 'Build KernelSU-Next A13+'
         required: true
-        default: true
+        default: false
         type: boolean
       build_ksun_old:
         description: 'Build KernelSU-Next A11+'
@@ -242,7 +242,12 @@ jobs:
       run: |
         cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
         curl -fLSs "$KERNELSU_SETUP_SOURCE" | bash -s "$KERNELSU_TAG"
-        ACTUAL_KSU_SHA="$(git -C KernelSU-Next rev-parse HEAD)"
+        if [[ "${{ matrix.target }}" == xxksu* ]]; then
+            KSU_CHECKOUT=KernelSU
+        else
+            KSU_CHECKOUT=KernelSU-Next
+        fi
+        ACTUAL_KSU_SHA="$(git -C "$KSU_CHECKOUT" rev-parse HEAD)"
         test "$ACTUAL_KSU_SHA" = "$KERNELSU_TAG" || { echo "KernelSU commit mismatch"; exit 1; }
         KSU_VERSION="_${ACTUAL_KSU_SHA:0:10}"
         echo "UPLOADNAME=-KernelSU-${{ matrix.target }}$KSU_VERSION" >> $GITHUB_ENV
@@ -332,6 +337,17 @@ jobs:
       if: startsWith(matrix.target, 'ksun')
       run: |
         python3 "$GITHUB_WORKSPACE/scripts/port_ksun_susfs.py" "$GITHUB_WORKSPACE/kernel_workspace/android-kernel"
+
+    - name: Port Zenith SuSFS 2.3.0 into pinned xxKSU
+      if: startsWith(matrix.target, 'xxksu')
+      run: |
+        set -e
+        cd "$GITHUB_WORKSPACE/kernel_workspace/android-kernel"
+        grep -Fqx '#define SUSFS_VERSION "v2.3.0"' include/linux/susfs.h
+        grep -Fq 'DEFINE_STATIC_KEY_FALSE(susfs_is_avc_log_spoofing_enabled)' fs/susfs.c
+        grep -Fq 'extern struct static_key_false susfs_is_avc_log_spoofing_enabled;' security/selinux/avc.c
+        grep -Fq 'if (!static_branch_unlikely(&susfs_is_uname_spoof_buffer_set))' fs/susfs.c
+        python3 "$GITHUB_WORKSPACE/scripts/port_xxksu_susfs.py" "$PWD"
 
     - name: Setup Configuration for kernel
       run: |
@@ -461,6 +477,21 @@ jobs:
                 fi
             done
             echo "Verified official KernelSU-Next manual hooks + Zenith SuSFS + NoMount"
+        fi
+        if [[ "${{ matrix.target }}" == xxksu* && "$DEVICE" == "selene" ]]; then
+            for required in \
+                CONFIG_KSU=y \
+                CONFIG_KSU_TAMPER_SYSCALL_TABLE=y \
+                CONFIG_KSU_SUSFS=y \
+                CONFIG_KSU_SUSFS_SUS_MOUNT=y \
+                CONFIG_KSU_SUSFS_SUS_KSTAT=y \
+                CONFIG_KSU_SUSFS_SUS_MAP=y \
+                CONFIG_NOMOUNT=y; do
+                grep -qx "$required" out/.config || { echo "Missing xxKSU requirement: $required"; exit 1; }
+            done
+            grep -qx 'CONFIG_KSU_MANUAL_HOOK=y' out/.config &&
+                { echo "KernelSU-Next manual hooks must not be active with xxKSU"; exit 1; }
+            echo "Verified xxKSU syscall-table hooks + Zenith SuSFS 2.3.0 + NoMount 2.2.0"
         fi
         if [ ${{ env.ENABLE_CCACHE }} = true ]; then
             if [ ${{ env.USE_GCC }} = true ]; then
