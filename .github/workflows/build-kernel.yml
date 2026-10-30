@@ -319,6 +319,14 @@ jobs:
           exit 1
         fi
         echo "SuSFS 2.3 mount-hide state and call sites verified"
+        # Android first-stage init calls uname() before userspace configures SuSFS.
+        # Returning a zero-initialized spoofed release makes init reboot to Fastboot.
+        if ! sed -n '/^void susfs_spoof_uname(/,/^}/p' fs/susfs.c |
+             grep -Fq 'if (!static_branch_unlikely(&susfs_is_uname_spoof_buffer_set))'; then
+          echo "Missing SuSFS uname initialization guard (Fastboot regression)"
+          exit 1
+        fi
+        echo "SuSFS uname early-boot initialization guard verified"
 
     - name: Port Zenith SuSFS to official KernelSU-Next legacy
       if: startsWith(matrix.target, 'ksun')
