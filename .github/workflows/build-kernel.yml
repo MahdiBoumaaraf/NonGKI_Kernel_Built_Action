@@ -241,35 +241,113 @@ jobs:
       if: env.ENABLE_KERNELSU == 'true'
       run: |
         cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
-        curl -LSs "$KERNELSU_SETUP_SOURCE" | bash -s ${{ env.KERNELSU_TAG }}
-        KSU_VERSION="_$(cd $(echo "$KERNELSU_SETUP_SOURCE" | cut -d/ -f5) || cd KernelSU && expr $(git rev-list --count HEAD) + 10200)"
+        curl -fLSs "$KERNELSU_SETUP_SOURCE" | bash -s "$KERNELSU_TAG"
+        if [[ "${{ matrix.target }}" == xxksu* ]]; then
+            KSU_CHECKOUT=KernelSU
+        else
+            KSU_CHECKOUT=KernelSU-Next
+        fi
+        ACTUAL_KSU_SHA="$(git -C "$KSU_CHECKOUT" rev-parse HEAD)"
+        test "$ACTUAL_KSU_SHA" = "$KERNELSU_TAG" || { echo "KernelSU commit mismatch"; exit 1; }
+        KSU_VERSION="_${ACTUAL_KSU_SHA:0:10}"
         echo "UPLOADNAME=-KernelSU-${{ matrix.target }}$KSU_VERSION" >> $GITHUB_ENV
         if [ ${{ env.KSU_REVERT }} = true ]; then
             git apply $GITHUB_WORKSPACE/patches/KSU_REVERT.patch
         fi
 
-    - name: Adapt KernelSU Next to Zenith SuSFS workqueue
-      if: matrix.target == 'ksun'
+    - name: Check official KernelSU-Next manual hook integration
+      if: startsWith(matrix.target, 'ksun')
       run: |
+        set -e
         cd "$GITHUB_WORKSPACE/kernel_workspace/android-kernel"
-        python3 - <<'PY'
-        from pathlib import Path
+        for target in \
+          "fs/exec.c:ksu_handle_execveat(&fd, &filename, &argv, &envp, &flags)" \
+          "fs/open.c:ksu_handle_faccessat(&dfd, &filename, &mode, &flags)" \
+          "fs/read_write.c:ksu_handle_sys_read(fd)" \
+          "fs/stat.c:ksu_handle_stat(&dfd, &filename, &flag)" \
+          "kernel/reboot.c:ksu_handle_sys_reboot(magic1, magic2, cmd, &arg)"; do
+          file="${target%%:*}"
+          needle="${target#*:}"
+          grep -Fq "$needle" "$file" || { echo "Missing manual KSU hook in $file: $needle"; exit 1; }
+        done
+        echo "All five official Legacy manual hook points are present"
+        grep -Fqx '#define SUSFS_VERSION "v2.3.0"' include/linux/susfs.h || { echo "SUSFS v2.3.0 core header missing"; exit 1; }
+        grep -Fq 'void susfs_sus_kstat_spoof_generic_fillattr(' fs/susfs.c || { echo "SUSFS v2.3.0 kstat implementation missing"; exit 1; }
+        grep -Fq 'susfs_sus_kstat_spoof_show_map_vma' fs/proc/task_mmu.c || { echo "SUSFS 2.3 kstat VFS caller missing"; exit 1; }
+        grep -Fq 'STATX_SUS_KSTAT_FUSE' include/linux/susfs_def.h || { echo "SUSFS 2.3 FUSE kstat marker missing"; exit 1; }
+        echo "SuSFS v2.3.0 API and kernel call sites verified"
+        # Check actual Linux 4.14 call-site migrations, not just version strings.
+        for required in \
+          "fs/proc/cmdline.c:susfs_is_fake_cmdline_or_bootconfig_buffer_set" \
+          "fs/namespace.c:susfs_is_sdcard_android_data_not_decrypted" \
+          "fs/proc/fd.c:susfs_sus_kstat_spoof_proc_fd_seq_show" \
+          "fs/proc/task_mmu.c:susfs_open_redirect_spoof_show_map_vma_srcu" \
+          "fs/statfs.c:susfs_sus_kstat_spoof_vfs_statfs"; do
+          file="${required%%:*}"
+          needle="${required#*:}"
+          grep -Fq "$needle" "$file" || { echo "Incomplete SuSFS 2.3.0 port: $file lacks $needle"; exit 1; }
+        done
+        for obsolete in \
+          "fs/proc/cmdline.c:extern int susfs_spoof_cmdline_or_bootconfig" \
+          "fs/proc/fd.c:susfs_open_redirect_spoof_seq_show" \
+          "fs/statfs.c:susfs_open_redirect_spoof_vfs_statfs(" \
+          "fs/proc/task_mmu.c:susfs_open_redirect_spoof_show_map_vma("; do
+          file="${obsolete%%:*}"
+          needle="${obsolete#*:}"
+          if grep -Fq "$needle" "$file"; then
+            echo "Obsolete SuSFS 2.2 API still used in $file: $needle"
+            exit 1
+          fi
+        done
+        echo "SuSFS 2.3.0 VFS migration signatures verified"
+        # SuSFS 2.3 owns the AVC spoofing static key; SELinux must not define a bool.
+        grep -Fq 'DEFINE_STATIC_KEY_FALSE(susfs_is_avc_log_spoofing_enabled)' fs/susfs.c ||
+          { echo "Missing SuSFS 2.3 AVC static-key definition"; exit 1; }
+        grep -Fq 'extern struct static_key_false susfs_is_avc_log_spoofing_enabled;' security/selinux/avc.c ||
+          { echo "SELinux AVC must reference the SuSFS static key"; exit 1; }
+        grep -Fq 'static_branch_unlikely(&susfs_is_avc_log_spoofing_enabled)' security/selinux/avc.c ||
+          { echo "SELinux AVC still uses the old 2.2 bool interface"; exit 1; }
+        if grep -Eq '^[[:space:]]*bool[[:space:]]+susfs_is_avc_log_spoofing_enabled[[:space:]]*=' security/selinux/avc.c; then
+          echo "Duplicate SuSFS AVC spoofing symbol detected"
+          exit 1
+        fi
+        echo "SuSFS AVC static-key ownership verified"
+        # SuSFS 2.3 exports a static key, not the v2.2 plain bool.
+        grep -Fq 'DEFINE_STATIC_KEY_FALSE(susfs_is_hide_sus_mnts_for_non_su_procs_enabled)' fs/susfs.c ||
+          { echo "Missing SuSFS 2.3 mount-hide static key"; exit 1; }
+        grep -Fq 'extern struct static_key_false susfs_is_hide_sus_mnts_for_non_su_procs_enabled;' fs/proc_namespace.c ||
+          { echo "proc_namespace.c must reference SuSFS 2.3 mount-hide static key"; exit 1; }
+        test "$(grep -Fc 'static_branch_unlikely(&susfs_is_hide_sus_mnts_for_non_su_procs_enabled)' fs/proc_namespace.c)" -eq 3 ||
+          { echo "Incomplete SuSFS 2.3 mount filtering migration"; exit 1; }
+        if grep -Fq 'susfs_hide_sus_mnts_for_non_su_procs;' fs/proc_namespace.c; then
+          echo "Obsolete SuSFS 2.2 mount-hide bool reference detected"
+          exit 1
+        fi
+        echo "SuSFS 2.3 mount-hide state and call sites verified"
+        # Android first-stage init calls uname() before userspace configures SuSFS.
+        # Returning a zero-initialized spoofed release makes init reboot to Fastboot.
+        if ! sed -n '/^void susfs_spoof_uname(/,/^}/p' fs/susfs.c |
+             grep -Fq 'if (!static_branch_unlikely(&susfs_is_uname_spoof_buffer_set))'; then
+          echo "Missing SuSFS uname initialization guard (Fastboot regression)"
+          exit 1
+        fi
+        echo "SuSFS uname early-boot initialization guard verified"
 
-        path = Path("drivers/kernelsu/setuid_hook.c")
-        source = path.read_text()
-        old_extern = "extern void susfs_run_sus_path_loop(void);"
-        old_call = "    susfs_run_sus_path_loop();"
-        if source.count(old_extern) != 1 or source.count(old_call) != 1:
-            raise SystemExit("Unexpected KernelSU Next SuSFS hook; refusing to patch")
-        source = source.replace(old_extern, "extern struct work_struct susfs_extra_works;")
-        source = source.replace(old_call, "    schedule_work(&susfs_extra_works);")
-        if "#include <linux/workqueue.h>" not in source:
-            source = "#include <linux/workqueue.h>\\n".replace("\\n", "\n") + source
-        path.write_text(source)
-        PY
-        grep -q 'static void susfs_run_sus_path_loop(void)' fs/susfs.c
-        grep -q 'INIT_WORK(&susfs_extra_works, susfs_run_extra_works)' fs/susfs.c
-        echo "KernelSU Next now schedules Zenith's existing SuSFS workqueue"
+    - name: Port Zenith SuSFS to official KernelSU-Next legacy
+      if: startsWith(matrix.target, 'ksun')
+      run: |
+        python3 "$GITHUB_WORKSPACE/scripts/port_ksun_susfs.py" "$GITHUB_WORKSPACE/kernel_workspace/android-kernel"
+
+    - name: Port Zenith SuSFS 2.3.0 into pinned xxKSU
+      if: startsWith(matrix.target, 'xxksu')
+      run: |
+        set -e
+        cd "$GITHUB_WORKSPACE/kernel_workspace/android-kernel"
+        grep -Fqx '#define SUSFS_VERSION "v2.3.0"' include/linux/susfs.h
+        grep -Fq 'DEFINE_STATIC_KEY_FALSE(susfs_is_avc_log_spoofing_enabled)' fs/susfs.c
+        grep -Fq 'extern struct static_key_false susfs_is_avc_log_spoofing_enabled;' security/selinux/avc.c
+        grep -Fq 'if (!static_branch_unlikely(&susfs_is_uname_spoof_buffer_set))' fs/susfs.c
+        python3 "$GITHUB_WORKSPACE/scripts/port_xxksu_susfs.py" "$PWD"
 
     - name: Setup Configuration for kernel
       run: |
@@ -290,22 +368,19 @@ jobs:
                 echo "CONFIG_HAVE_KPROBES=y" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
                 echo "CONFIG_KPROBE_EVENTS=y" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
             fi
-        for config in CONFIG_KSU=y \
-                      CONFIG_KSU_TAMPER_SYSCALL_TABLE=y \
-                      CONFIG_KSU_SUSFS=y \
-                      CONFIG_KSU_SUSFS_SUS_PATH=y \
-                      CONFIG_KSU_SUSFS_SUS_MOUNT=y \
-                      CONFIG_KSU_SUSFS_SUS_KSTAT=y \
-                      CONFIG_KSU_SUSFS_SPOOF_UNAME=y \
-                      CONFIG_KSU_SUSFS_ENABLE_LOG=y \
-                      CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y \
-                      CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y \
-                      CONFIG_KSU_SUSFS_SUS_OVERLAYFS=y \
-                      CONFIG_KSU_SUSFS_OPEN_REDIRECT=y \
-                      CONFIG_KSU_SUSFS_SUS_MAP=y
-        do
-        echo "$config" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
-        done
+            if [[ "${{ matrix.target }}" == ksun* ]]; then
+                echo "CONFIG_KSU=y" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
+                echo "CONFIG_KSU_MANUAL_HOOK=y" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
+                echo "# CONFIG_KSU_KPROBES_HOOK is not set" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
+            elif [[ "${{ matrix.target }}" == xxksu* ]]; then
+                # Select xxKSU 4.14 syscall hooks only in the temporary build tree.
+                bash scripts/config --file arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig \
+                    --disable KSU_MANUAL_HOOK \
+                    --disable KSU_KPROBES_HOOK \
+                    --enable KSU_TAMPER_SYSCALL_TABLE \
+                    --disable KSU_HACK_ARM64_BRANCH_LINK \
+                    --enable KSU_LSM_SECURITY_HOOKS
+            fi
         fi
         if [ ${{ env.ADD_OVERLAYFS_CONFIG }} = true ]; then
             echo "CONFIG_OVERLAY_FS=y" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
@@ -387,6 +462,47 @@ jobs:
           export KSU_EXPECTED_HASH=${{ env.KSU_EXPECTED_HASH }}
         fi
         make -j$(nproc --all) CC=clang O=out ARCH=${{ env.KERNEL_ARCH }} ${{ env.EXTRA_CMDS }} ${DEVICE}_defconfig
+        if [[ "${{ matrix.target }}" == ksun* && "$DEVICE" == "selene" ]]; then
+            for required in \
+                CONFIG_KSU=y \
+                CONFIG_KSU_MANUAL_HOOK=y \
+                CONFIG_KSU_SUSFS=y \
+                CONFIG_KSU_SUSFS_SUS_MOUNT=y \
+                CONFIG_KSU_SUSFS_SUS_KSTAT=y \
+                CONFIG_NOMOUNT=y; do
+                grep -qx "$required" out/.config || { echo "Missing required: $required"; exit 1; }
+            done
+            for disabled in \
+                CONFIG_KSU_SUSFS_SUS_PATH \
+                CONFIG_KSU_SUSFS_OPEN_REDIRECT \
+                CONFIG_KSU_SUSFS_TRY_UMOUNT \
+                CONFIG_KSU_KPROBES_HOOK; do
+                # Hidden Kconfig symbols can be completely absent when their
+                # dependencies are unmet. Only '=y' actually enables them.
+                if grep -qx "$disabled=y" out/.config; then
+                    echo "Unexpectedly enabled: $disabled"
+                    exit 1
+                fi
+            done
+            echo "Verified official KernelSU-Next manual hooks + Zenith SuSFS + NoMount"
+        fi
+        if [[ "${{ matrix.target }}" == xxksu* && "$DEVICE" == "selene" ]]; then
+            for required in \
+                CONFIG_KSU=y \
+                CONFIG_KSU_TAMPER_SYSCALL_TABLE=y \
+                CONFIG_KSU_SUSFS=y \
+                CONFIG_KSU_SUSFS_SUS_MOUNT=y \
+                CONFIG_KSU_SUSFS_SUS_KSTAT=y \
+                CONFIG_KSU_SUSFS_SUS_MAP=y \
+                CONFIG_NOMOUNT=y; do
+                grep -qx "$required" out/.config || { echo "Missing xxKSU requirement: $required"; exit 1; }
+            done
+            if grep -qx 'CONFIG_KSU_MANUAL_HOOK=y' out/.config; then
+                echo "KernelSU-Next manual hooks must not be active with xxKSU"
+                exit 1
+            fi
+            echo "Verified xxKSU syscall-table hooks + Zenith SuSFS 2.3.0 + NoMount 2.2.0"
+        fi
         if [ ${{ env.ENABLE_CCACHE }} = true ]; then
             if [ ${{ env.USE_GCC }} = true ]; then
                 make -j$(nproc --all) CC="ccache gcc" O=out ARCH=${{ env.KERNEL_ARCH }} ${{ env.EXTRA_CMDS }}
