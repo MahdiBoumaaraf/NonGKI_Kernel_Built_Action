@@ -14,7 +14,7 @@ on:
       build_ksun:
         description: 'Build KernelSU-Next A13+'
         required: true
-        default: false
+        default: true
         type: boolean
       build_ksun_old:
         description: 'Build KernelSU-Next A11+'
@@ -372,6 +372,14 @@ jobs:
                 echo "CONFIG_KSU=y" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
                 echo "CONFIG_KSU_MANUAL_HOOK=y" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
                 echo "# CONFIG_KSU_KPROBES_HOOK is not set" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
+            elif [[ "${{ matrix.target }}" == xxksu* ]]; then
+                # Select xxKSU 4.14 syscall hooks only in the temporary build tree.
+                bash scripts/config --file arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig \
+                    --disable KSU_MANUAL_HOOK \
+                    --disable KSU_KPROBES_HOOK \
+                    --enable KSU_TAMPER_SYSCALL_TABLE \
+                    --disable KSU_HACK_ARM64_BRANCH_LINK \
+                    --enable KSU_LSM_SECURITY_HOOKS
             fi
         fi
         if [ ${{ env.ADD_OVERLAYFS_CONFIG }} = true ]; then
