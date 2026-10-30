@@ -295,6 +295,18 @@ jobs:
           fi
         done
         echo "SuSFS 2.3.0 VFS migration signatures verified"
+        # SuSFS 2.3 owns the AVC spoofing static key; SELinux must not define a bool.
+        grep -Fq 'DEFINE_STATIC_KEY_FALSE(susfs_is_avc_log_spoofing_enabled)' fs/susfs.c ||
+          { echo "Missing SuSFS 2.3 AVC static-key definition"; exit 1; }
+        grep -Fq 'extern struct static_key_false susfs_is_avc_log_spoofing_enabled;' security/selinux/avc.c ||
+          { echo "SELinux AVC must reference the SuSFS static key"; exit 1; }
+        grep -Fq 'static_branch_unlikely(&susfs_is_avc_log_spoofing_enabled)' security/selinux/avc.c ||
+          { echo "SELinux AVC still uses the old 2.2 bool interface"; exit 1; }
+        if grep -Eq '^[[:space:]]*bool[[:space:]]+susfs_is_avc_log_spoofing_enabled[[:space:]]*=' security/selinux/avc.c; then
+          echo "Duplicate SuSFS AVC spoofing symbol detected"
+          exit 1
+        fi
+        echo "SuSFS AVC static-key ownership verified"
 
     - name: Port Zenith SuSFS to official KernelSU-Next legacy
       if: startsWith(matrix.target, 'ksun')
