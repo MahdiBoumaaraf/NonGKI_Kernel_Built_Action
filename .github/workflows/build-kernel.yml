@@ -360,6 +360,25 @@ jobs:
           export KSU_EXPECTED_HASH=${{ env.KSU_EXPECTED_HASH }}
         fi
         make -j$(nproc --all) CC=clang O=out ARCH=${{ env.KERNEL_ARCH }} ${{ env.EXTRA_CMDS }} ${DEVICE}_defconfig
+        if [[ "${{ matrix.target }}" == ksun* && "$DEVICE" == "selene" ]]; then
+            for required in \
+                CONFIG_KSU=y \
+                CONFIG_KSU_MANUAL_HOOK=y \
+                CONFIG_KSU_SUSFS=y \
+                CONFIG_KSU_SUSFS_SUS_MOUNT=y \
+                CONFIG_KSU_SUSFS_SUS_KSTAT=y \
+                CONFIG_NOMOUNT=y; do
+                grep -qx "$required" out/.config || { echo "Missing required: $required"; exit 1; }
+            done
+            for disabled in \
+                CONFIG_KSU_SUSFS_SUS_PATH \
+                CONFIG_KSU_SUSFS_OPEN_REDIRECT \
+                CONFIG_KSU_SUSFS_TRY_UMOUNT \
+                CONFIG_KSU_KPROBES_HOOK; do
+                grep -qx "# $disabled is not set" out/.config || { echo "Unexpectedly enabled: $disabled"; exit 1; }
+            done
+            echo "Verified official KernelSU-Next manual hooks + Zenith SuSFS + NoMount"
+        fi
         if [ ${{ env.ENABLE_CCACHE }} = true ]; then
             if [ ${{ env.USE_GCC }} = true ]; then
                 make -j$(nproc --all) CC="ccache gcc" O=out ARCH=${{ env.KERNEL_ARCH }} ${{ env.EXTRA_CMDS }}
