@@ -375,7 +375,12 @@ jobs:
                 CONFIG_KSU_SUSFS_OPEN_REDIRECT \
                 CONFIG_KSU_SUSFS_TRY_UMOUNT \
                 CONFIG_KSU_KPROBES_HOOK; do
-                grep -qx "# $disabled is not set" out/.config || { echo "Unexpectedly enabled: $disabled"; exit 1; }
+                # Hidden Kconfig symbols can be completely absent when their
+                # dependencies are unmet. Only '=y' actually enables them.
+                if grep -qx "$disabled=y" out/.config; then
+                    echo "Unexpectedly enabled: $disabled"
+                    exit 1
+                fi
             done
             echo "Verified official KernelSU-Next manual hooks + Zenith SuSFS + NoMount"
         fi
