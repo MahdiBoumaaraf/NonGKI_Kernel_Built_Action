@@ -307,6 +307,18 @@ jobs:
           exit 1
         fi
         echo "SuSFS AVC static-key ownership verified"
+        # SuSFS 2.3 exports a static key, not the v2.2 plain bool.
+        grep -Fq 'DEFINE_STATIC_KEY_FALSE(susfs_is_hide_sus_mnts_for_non_su_procs_enabled)' fs/susfs.c ||
+          { echo "Missing SuSFS 2.3 mount-hide static key"; exit 1; }
+        grep -Fq 'extern struct static_key_false susfs_is_hide_sus_mnts_for_non_su_procs_enabled;' fs/proc_namespace.c ||
+          { echo "proc_namespace.c must reference SuSFS 2.3 mount-hide static key"; exit 1; }
+        test "$(grep -Fc 'static_branch_unlikely(&susfs_is_hide_sus_mnts_for_non_su_procs_enabled)' fs/proc_namespace.c)" -eq 3 ||
+          { echo "Incomplete SuSFS 2.3 mount filtering migration"; exit 1; }
+        if grep -Fq 'susfs_hide_sus_mnts_for_non_su_procs;' fs/proc_namespace.c; then
+          echo "Obsolete SuSFS 2.2 mount-hide bool reference detected"
+          exit 1
+        fi
+        echo "SuSFS 2.3 mount-hide state and call sites verified"
 
     - name: Port Zenith SuSFS to official KernelSU-Next legacy
       if: startsWith(matrix.target, 'ksun')
