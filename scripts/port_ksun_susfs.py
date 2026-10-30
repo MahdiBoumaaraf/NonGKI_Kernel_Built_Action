@@ -44,11 +44,6 @@ SUSFS_SUPERCALLS = """
             susfs_update_sus_kstat(arg);
             break;
 #endif
-#ifdef CONFIG_KSU_SUSFS_TRY_UMOUNT
-        case CMD_SUSFS_ADD_TRY_UMOUNT:
-            susfs_add_try_umount(arg);
-            break;
-#endif
 #ifdef CONFIG_KSU_SUSFS_SPOOF_UNAME
         case CMD_SUSFS_SET_UNAME:
             susfs_set_uname(arg);
