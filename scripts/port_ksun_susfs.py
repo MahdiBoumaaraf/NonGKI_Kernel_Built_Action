@@ -112,6 +112,25 @@ def main():
     patch(ksu, "core/init.c",
           '\tksu_lsm_hook_init();\n',
           '\tksu_lsm_hook_init();\n#ifdef CONFIG_KSU_SUSFS\n\tsusfs_init();\n#endif\n')
+    # Zenith's security/selinux/avc.c references these two SuSFS SIDs.
+    # The official legacy branch caches the SU SID under another name.
+    patch(ksu, "selinux/selinux.c",
+          'u32 ksu_file_sid __read_mostly = 0;\n',
+          'u32 ksu_file_sid __read_mostly = 0;\n'
+          '#ifdef CONFIG_KSU_SUSFS\n'
+          'u32 susfs_ksu_sid __read_mostly = 0;\n'
+          'u32 susfs_priv_app_sid __read_mostly = 0;\n'
+          '#endif\n')
+    patch(ksu, "selinux/selinux.c",
+          '    err = security_secctx_to_secid(ZYGOTE_CONTEXT, strlen(ZYGOTE_CONTEXT),\n',
+          '#ifdef CONFIG_KSU_SUSFS\n'
+          '    susfs_ksu_sid = cached_su_sid;\n'
+          '    if (security_secctx_to_secid("u:r:priv_app:s0:c512,c768",\n'
+          '                                 strlen("u:r:priv_app:s0:c512,c768"),\n'
+          '                                 &susfs_priv_app_sid))\n'
+          '        susfs_priv_app_sid = 0;\n'
+          '#endif\n'
+          '    err = security_secctx_to_secid(ZYGOTE_CONTEXT, strlen(ZYGOTE_CONTEXT),\n')
     patch(ksu, "selinux/selinux.c",
           'bool is_ksu_domain(void)\n',
           '#ifdef CONFIG_KSU_SUSFS\n'
