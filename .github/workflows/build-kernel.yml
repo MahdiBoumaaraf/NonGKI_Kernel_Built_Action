@@ -31,6 +31,15 @@ on:
         required: true
         default: false
         type: boolean
+      create_boot_img:
+        description: 'Create boot.img from an original matching ROM image'
+        required: false
+        default: false
+        type: boolean
+      boot_img_url:
+        description: 'Direct HTTPS URL to original boot.img (required if enabled)'
+        required: false
+        type: string
 
 jobs:
   generate-build-matrix:
@@ -584,32 +593,39 @@ jobs:
         fi
         rm -rf AnyKernel3/.git* AnyKernel3/README.md
 
-    - name: Repack selected device boot.img with compiled kernel
-      if: env.CHECK_FILE_IS_OK == 'true'
+    - name: Repack optional boot.img from matching ROM source
+      if: env.CHECK_FILE_IS_OK == 'true' && inputs.create_boot_img == true
       shell: bash
+      env:
+        SOURCE_BOOT_URL: ${{ inputs.boot_img_url }}
       run: |
         set -euo pipefail
-        SOURCE_BOOT="$GITHUB_WORKSPACE/boot_img/${DEVICE}_boot.img"
-        if [[ ! -f "$SOURCE_BOOT" ]]; then
-          echo "No boot_img/${DEVICE}_boot.img found; skipping boot.img export"
-          echo "boot.img skipped: add boot_img/${DEVICE}_boot.img to enable it." >> "$GITHUB_STEP_SUMMARY"
-          exit 0
+        if [[ "$SOURCE_BOOT_URL" != https://* ]]; then
+          echo "::error::A direct HTTPS URL to the matching original boot.img is required."
+          exit 1
         fi
         WORK="$GITHUB_WORKSPACE/kernel_workspace/boot-repack"
         mkdir -p "$WORK/unpacked" "$WORK/verified"
         cd "$WORK"
-        cp "$SOURCE_BOOT" boot-source.img
+        curl --fail --location --retry 3 --connect-timeout 20 \
+          --output boot-source.img "$SOURCE_BOOT_URL"
         test -s boot-source.img
         if [[ "$(head -c 8 boot-source.img)" != "ANDROID!" ]]; then
-          echo "::error::boot_img/${DEVICE}_boot.img is not an Android boot image (or is a Git LFS pointer)"
+          echo "::error::The source is not a valid Android boot image."
           exit 1
         fi
-        echo "Source boot size: $(stat -c %s boot-source.img) bytes"
-        if (( $(stat -c %s boot-source.img) > 67108864 )); then
-          echo "::error::Input boot.img exceeds the 64 MiB boot partition limit for $DEVICE"
-          exit 1
+        SOURCE_SIZE=$(stat -c %s boot-source.img)
+        echo "Source boot size: $SOURCE_SIZE bytes"
+        if [[ "$DEVICE" == "selene" ]]; then
+          TARGET_SIZE=67108864
+          if (( SOURCE_SIZE > TARGET_SIZE )); then
+            echo "::error::Input boot.img exceeds selene's 64 MiB partition."
+            exit 1
+          fi
+        else
+          # Device partition size is not verified: never exceed the supplied source.
+          TARGET_SIZE="$SOURCE_SIZE"
         fi
-        # Use the original header and ramdisk, replacing only the compiled kernel.
         curl --fail --location --retry 3 --silent --show-error \
           --output magisk.apk https://github.com/topjohnwu/Magisk/releases/download/v30.7/Magisk-v30.7.apk
         unzip -p magisk.apk lib/x86_64/libmagiskboot.so > magiskboot
@@ -624,7 +640,6 @@ jobs:
         cp "$BUILT_KERNEL" kernel
         ../magiskboot repack ../boot-source.img ../boot.img
         test -s ../boot.img
-        # Verify that repacking preserves original ramdisk and other non-kernel components.
         cd ../verified
         ../magiskboot unpack -h ../boot.img
         cmp ../unpacked/kernel "$BUILT_KERNEL"
@@ -636,20 +651,15 @@ jobs:
         done
         cd ..
         OUTPUT_SIZE=$(stat -c %s boot.img)
-        if (( OUTPUT_SIZE > 67108864 )); then
-          echo "::error::New boot.img exceeds the 64 MiB boot partition limit for $DEVICE"
+        if (( OUTPUT_SIZE > TARGET_SIZE )); then
+          echo "::error::Repacked boot.img exceeds the permitted image size for $DEVICE."
           exit 1
         fi
         echo "Repacked boot.img before padding: $OUTPUT_SIZE bytes"
-        # magiskboot may output a 32 MiB image from a 64 MiB stock boot.
-        # Pad with zeroes to the expected 64 MiB partition image size.
-        truncate -s 64M boot.img
-        OUTPUT_SIZE=$(stat -c %s boot.img)
-        if (( OUTPUT_SIZE != 67108864 )); then
-          echo "::error::Padded boot.img size is not 64 MiB: $OUTPUT_SIZE bytes"
-          exit 1
-        fi
-        echo "Final boot.img: $OUTPUT_SIZE bytes (64 MiB)"
+        truncate -s "$TARGET_SIZE" boot.img
+        FINAL_SIZE=$(stat -c %s boot.img)
+        test "$FINAL_SIZE" -eq "$TARGET_SIZE"
+        echo "Final boot.img: $FINAL_SIZE bytes ($DEVICE)"
         sha256sum boot.img
         echo "BOOT_REPACK_OK=true" >> "$GITHUB_ENV"
     - name: Export kernel name from defconfig
