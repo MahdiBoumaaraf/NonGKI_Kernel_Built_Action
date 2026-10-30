@@ -228,6 +228,23 @@ jobs:
         cd $GITHUB_WORKSPACE/kernel_workspace
         git clone --recursive ${{ env.KERNEL_SOURCE }} -b ${{ env.KERNEL_SOURCE_BRANCH }} android-kernel --depth=1
 
+    - name: Verify Zenith NoMount Protocol 22 source
+      if: env.DEVICE == 'selene'
+      run: |
+        set -euo pipefail
+        cd "$GITHUB_WORKSPACE/kernel_workspace/android-kernel"
+        grep -Fqx '#define NOMOUNT_BASE_VERSION "22"' fs/nomount/nomount.h ||
+          { echo "NoMount protocol v22 header missing"; exit 1; }
+        grep -Fq 'NM_FLAG_OPAQUE' fs/nomount/nomount.h ||
+          { echo "NoMount opaque-directory support missing"; exit 1; }
+        grep -Fq 'uid_end;' fs/nomount/nomount.h ||
+          { echo "NoMount UID-range support missing"; exit 1; }
+        grep -Fq 'deny_start;' fs/nomount/nomount.h ||
+          { echo "NoMount excluded-UID-range support missing"; exit 1; }
+        grep -Fq 'obj-$(CONFIG_NOMOUNT) += nomount.o' fs/nomount/Makefile ||
+          { echo "NoMount kernel Makefile integration missing"; exit 1; }
+        echo "Zenith NoMount 2.2.0 protocol 22 source checks passed"
+
     - name: Keep kernel version readable in HyperOS
       run: |
         cd "$GITHUB_WORKSPACE/kernel_workspace/android-kernel"
@@ -356,6 +373,10 @@ jobs:
         grep -Fq 'DEFINE_STATIC_KEY_FALSE(susfs_is_avc_log_spoofing_enabled)' fs/susfs.c
         grep -Fq 'extern struct static_key_false susfs_is_avc_log_spoofing_enabled;' security/selinux/avc.c
         grep -Fq 'if (!static_branch_unlikely(&susfs_is_uname_spoof_buffer_set))' fs/susfs.c
+        grep -Fq 'susfs_sus_kstat_spoof_generic_fillattr' fs/stat.c
+        grep -Fq 'susfs_sus_kstat_spoof_show_map_vma' fs/proc/task_mmu.c
+        grep -Fq 'STATX_SUS_KSTAT_FUSE' include/linux/susfs_def.h
+        grep -Fq 'susfs_sus_kstat_spoof_vfs_statfs' fs/statfs.c
         python3 "$GITHUB_WORKSPACE/scripts/port_xxksu_susfs.py" "$PWD"
 
     - name: Setup Configuration for kernel
