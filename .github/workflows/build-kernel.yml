@@ -489,8 +489,10 @@ jobs:
                 CONFIG_NOMOUNT=y; do
                 grep -qx "$required" out/.config || { echo "Missing xxKSU requirement: $required"; exit 1; }
             done
-            grep -qx 'CONFIG_KSU_MANUAL_HOOK=y' out/.config &&
-                { echo "KernelSU-Next manual hooks must not be active with xxKSU"; exit 1; }
+            if grep -qx 'CONFIG_KSU_MANUAL_HOOK=y' out/.config; then
+                echo "KernelSU-Next manual hooks must not be active with xxKSU"
+                exit 1
+            fi
             echo "Verified xxKSU syscall-table hooks + Zenith SuSFS 2.3.0 + NoMount 2.2.0"
         fi
         if [ ${{ env.ENABLE_CCACHE }} = true ]; then
