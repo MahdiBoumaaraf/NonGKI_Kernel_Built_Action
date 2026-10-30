@@ -266,6 +266,11 @@ jobs:
           grep -Fq "$needle" "$file" || { echo "Missing manual KSU hook in $file: $needle"; exit 1; }
         done
         echo "All five official Legacy manual hook points are present"
+        grep -Fqx '#define SUSFS_VERSION "v2.3.0"' include/linux/susfs.h || { echo "SUSFS v2.3.0 core header missing"; exit 1; }
+        grep -Fq 'void susfs_sus_kstat_spoof_generic_fillattr(' fs/susfs.c || { echo "SUSFS v2.3.0 kstat implementation missing"; exit 1; }
+        grep -Fq 'susfs_sus_kstat_spoof_show_map_vma' fs/proc/task_mmu.c || { echo "SUSFS 2.3 kstat VFS caller missing"; exit 1; }
+        grep -Fq 'STATX_SUS_KSTAT_FUSE' include/linux/susfs_def.h || { echo "SUSFS 2.3 FUSE kstat marker missing"; exit 1; }
+        echo "SuSFS v2.3.0 API and kernel call sites verified"
 
     - name: Port Zenith SuSFS to official KernelSU-Next legacy
       if: startsWith(matrix.target, 'ksun')
