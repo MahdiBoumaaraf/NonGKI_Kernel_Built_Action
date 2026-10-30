@@ -250,6 +250,23 @@ jobs:
             git apply $GITHUB_WORKSPACE/patches/KSU_REVERT.patch
         fi
 
+    - name: Check official KernelSU-Next manual hook integration
+      if: startsWith(matrix.target, 'ksun')
+      run: |
+        set -e
+        cd "$GITHUB_WORKSPACE/kernel_workspace/android-kernel"
+        for target in \
+          "fs/exec.c:ksu_handle_execveat(&fd, &filename, &argv, &envp, &flags)" \
+          "fs/open.c:ksu_handle_faccessat(&dfd, &filename, &mode, &flags)" \
+          "fs/read_write.c:ksu_handle_sys_read(fd)" \
+          "fs/stat.c:ksu_handle_stat(&dfd, &filename, &flag)" \
+          "kernel/reboot.c:ksu_handle_sys_reboot(magic1, magic2, cmd, &arg)"; do
+          file="${target%%:*}"
+          needle="${target#*:}"
+          grep -Fq "$needle" "$file" || { echo "Missing manual KSU hook in $file: $needle"; exit 1; }
+        done
+        echo "All five official Legacy manual hook points are present"
+
     - name: Port Zenith SuSFS to official KernelSU-Next legacy
       if: startsWith(matrix.target, 'ksun')
       run: |
